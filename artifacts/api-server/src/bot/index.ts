@@ -13,12 +13,14 @@ import {
   handleCabinet,
   handlePurchases,
   handleTopupStart,
+  handleTopupAmount,
   handlePromoStart,
   handlePromoActivate,
 } from "./handlers/user";
 import { handleAdminPanel, handleAdminCallback, handleAdminMessage } from "./handlers/admin";
 import { handleSupportStart, handleSupportMessage, handleAdminSupportReply } from "./handlers/support";
 import { getUserState, clearUserState } from "./state";
+import { registerBot } from "../routes/platega-webhook";
 
 export function startBot() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -28,6 +30,8 @@ export function startBot() {
   }
 
   const bot = new TelegramBot(token, { polling: true });
+
+  registerBot(bot);
 
   bot.on("polling_error", (err) => {
     logger.error({ err }, "Telegram polling error");
@@ -78,17 +82,7 @@ export function startBot() {
       }
 
       if (userState.step === "topup_wait_amount") {
-        clearUserState(userId);
-        const amount = parseInt(msg.text.trim(), 10);
-        if (isNaN(amount) || amount <= 0) {
-          await bot.sendMessage(msg.chat.id, "❌ Введите корректную сумму.", { reply_markup: mainKeyboard });
-          return;
-        }
-        await bot.sendMessage(
-          msg.chat.id,
-          `💰 Для пополнения баланса на <b>${amount}₽</b> свяжитесь с администратором: @GromVMagic\n\nУкажите ваш ID: <code>${userId}</code>`,
-          { parse_mode: "HTML", reply_markup: mainKeyboard }
-        );
+        await handleTopupAmount(bot, msg);
         return;
       }
 

@@ -6,3 +6,4 @@ export * from "./keys";
 export * from "./purchases";
 export * from "./promocodes";
 export * from "./balance";
+export * from "./payments";

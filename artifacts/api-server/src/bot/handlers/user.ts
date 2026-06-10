@@ -4,6 +4,7 @@ import { db, schema } from "../db";
 import { mainKeyboard, cabinetKeyboard } from "../keyboards";
 import { getUserState, setUserState, clearUserState } from "../state";
 import { logger } from "../../lib/logger";
+import { createInvoice } from "../../services/platega";
 
 export async function ensureUser(msg: TelegramBot.Message) {
   const userId = msg.from!.id;
@@ -351,10 +352,55 @@ export async function handleTopupStart(bot: TelegramBot, query: TelegramBot.Call
   await bot.answerCallbackQuery(query.id);
   await bot.sendMessage(
     query.message!.chat.id,
-    `💰 <b>Пополнение баланса</b>\n\nДля пополнения баланса напишите нашему администратору или напишите желаемую сумму (в рублях), и мы выставим счёт.\n\nВведите сумму пополнения:`,
+    `💰 <b>Пополнение баланса</b>\n\nВведите сумму пополнения в рублях (минимум 50₽):`,
     { parse_mode: "HTML" }
   );
   setUserState(query.from.id, "topup_wait_amount");
+}
+
+export async function handleTopupAmount(bot: TelegramBot, msg: TelegramBot.Message) {
+  const userId = msg.from!.id;
+  clearUserState(userId);
+
+  const amount = parseInt(msg.text?.trim() ?? "", 10);
+  if (isNaN(amount) || amount < 50) {
+    await bot.sendMessage(msg.chat.id, "❌ Введите сумму не менее 50₽.", { reply_markup: mainKeyboard });
+    return;
+  }
+
+  await bot.sendMessage(msg.chat.id, "⏳ Создаём платёж...");
+
+  const result = await createInvoice(amount, userId);
+
+  if (!result.ok) {
+    await bot.sendMessage(msg.chat.id, `❌ ${result.error}`, { reply_markup: mainKeyboard });
+    return;
+  }
+
+  // Save pending payment to DB
+  await db.insert(schema.paymentsTable).values({
+    userId,
+    transactionId: result.transactionId,
+    amount,
+    status: "PENDING",
+  });
+
+  await bot.sendMessage(
+    msg.chat.id,
+    `💳 <b>Счёт на оплату создан</b>\n\n` +
+    `💰 Сумма: <b>${amount}₽</b>\n` +
+    `⏱ Действителен: <b>${result.expiresIn}</b>\n\n` +
+    `Нажмите кнопку ниже для оплаты. После успешной оплаты баланс пополнится автоматически.`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "💳 Оплатить", url: result.paymentUrl }],
+        ],
+      },
+    }
+  );
+  logger.info({ userId, amount, transactionId: result.transactionId }, "Payment invoice created");
 }
 
 export async function handlePromoStart(bot: TelegramBot, query: TelegramBot.CallbackQuery) {
