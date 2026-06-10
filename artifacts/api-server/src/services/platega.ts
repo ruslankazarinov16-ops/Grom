@@ -2,12 +2,11 @@ import { logger } from "../lib/logger";
 
 const BASE_URL = "https://app.platega.io";
 
-// ─── ЗАМЕНИ ЭТИ ЗНАЧЕНИЯ ПОСЛЕ ПОЛУЧЕНИЯ ДОСТУПА ───────────────────────────
-// Получи merchant_id и secret в личном кабинете https://platega.io
-// или напиши в @platega_support
+// ─── ВСТАВЬ СВОИ КЛЮЧИ СЮДА ─────────────────────────────────────────────────
+// Merchant UUID и секрет из личного кабинета https://platega.io
+const MERCHANT_ID = process.env.PLATEGA_MERCHANT_ID ?? "ВАШ_MERCHANT_ID";
+const SECRET_KEY  = process.env.PLATEGA_SECRET_KEY  ?? "ВАШ_SECRET_KEY";
 // ────────────────────────────────────────────────────────────────────────────
-const MERCHANT_ID = process.env.PLATEGA_MERCHANT_ID ?? "";
-const SECRET_KEY = process.env.PLATEGA_SECRET_KEY ?? "";
 
 export interface CreateInvoiceResult {
   ok: true;
