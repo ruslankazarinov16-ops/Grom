@@ -1,6 +1,6 @@
-# [Project name]
+# GromVMagic Shop Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Telegram-бот для продажи игровых ключей с каталогом, личным кабинетом, промокодами и полноценной админ-панелью.
 
 ## Run & Operate
 
