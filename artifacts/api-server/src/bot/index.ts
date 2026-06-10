@@ -15,6 +15,7 @@ import {
   handlePromoActivate,
 } from "./handlers/user";
 import { handleAdminPanel, handleAdminCallback, handleAdminMessage } from "./handlers/admin";
+import { handleSupportStart, handleSupportMessage, handleAdminSupportReply } from "./handlers/support";
 import { getUserState, clearUserState } from "./state";
 
 export function startBot() {
@@ -52,13 +53,17 @@ export function startBot() {
     if (!userId) return;
 
     try {
+      // Check if admin is replying to a support ticket first
+      const handledAsSupport = await handleAdminSupportReply(bot, msg);
+      if (handledAsSupport) return;
+
       const user = await ensureUser(msg);
       if (user?.isBanned) {
         await bot.sendMessage(msg.chat.id, "❌ Вы заблокированы.");
         return;
       }
 
-      // Check admin message handlers first
+      // Check admin message handlers
       const handledByAdmin = await handleAdminMessage(bot, msg);
       if (handledByAdmin) return;
 
@@ -82,6 +87,11 @@ export function startBot() {
           `💰 Для пополнения баланса на <b>${amount}₽</b> свяжитесь с администратором: @GromVMagic\n\nУкажите ваш ID: <code>${userId}</code>`,
           { parse_mode: "HTML", reply_markup: mainKeyboard }
         );
+        return;
+      }
+
+      if (userState.step === "support_wait_message") {
+        await handleSupportMessage(bot, msg);
         return;
       }
 
@@ -113,6 +123,9 @@ export function startBot() {
           break;
         case "👤 Мой кабинет":
           await handleCabinet(bot, msg);
+          break;
+        case "🆘 Поддержка":
+          await handleSupportStart(bot, msg);
           break;
         default:
           await bot.sendMessage(msg.chat.id, "Используйте кнопки меню ниже 👇", { reply_markup: mainKeyboard });

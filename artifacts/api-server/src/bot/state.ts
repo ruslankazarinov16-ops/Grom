@@ -20,7 +20,8 @@ export type AdminStep =
 export type UserStep =
   | "idle"
   | "promo_wait_code"
-  | "topup_wait_amount";
+  | "topup_wait_amount"
+  | "support_wait_message";
 
 interface AdminState {
   step: AdminStep;

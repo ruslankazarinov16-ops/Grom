@@ -4,7 +4,7 @@ export const mainKeyboard: TelegramBot.ReplyKeyboardMarkup = {
   keyboard: [
     [{ text: "🎮 Каталог" }, { text: "📰 Новости" }],
     [{ text: "⭐️ Отзывы" }, { text: "🛒 Как купить" }],
-    [{ text: "👤 Мой кабинет" }],
+    [{ text: "👤 Мой кабинет" }, { text: "🆘 Поддержка" }],
   ],
   resize_keyboard: true,
 };
