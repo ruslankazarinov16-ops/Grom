@@ -1,6 +1,7 @@
 export * from "./users";
 export * from "./categories";
 export * from "./products";
+export * from "./tiers";
 export * from "./keys";
 export * from "./purchases";
 export * from "./promocodes";

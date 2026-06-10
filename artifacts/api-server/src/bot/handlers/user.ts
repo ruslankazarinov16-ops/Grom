@@ -1,5 +1,5 @@
 import TelegramBot from "node-telegram-bot-api";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { db, schema } from "../db";
 import { mainKeyboard, cabinetKeyboard } from "../keyboards";
 import { getUserState, setUserState, clearUserState } from "../state";
@@ -60,7 +60,7 @@ export async function handleCategoryCallback(bot: TelegramBot, query: TelegramBo
   }
 
   const buttons: TelegramBot.InlineKeyboardButton[][] = products.map((p) => [
-    { text: `${p.name} — ${p.price}₽`, callback_data: `prod_${p.id}` },
+    { text: p.name, callback_data: `prod_${p.id}` },
   ]);
   buttons.push([{ text: "🔙 Назад к категориям", callback_data: "back_catalog" }]);
 
@@ -80,24 +80,103 @@ export async function handleProductCallback(bot: TelegramBot, query: TelegramBot
     return;
   }
 
-  const availableKeys = await db
+  const p = product[0];
+  const tiers = await db.select().from(schema.tiersTable).where(eq(schema.tiersTable.productId, prodId));
+
+  if (tiers.length > 0) {
+    // Product has tiers — count available keys per tier
+    const tierRows = await Promise.all(
+      tiers.map(async (t) => {
+        const available = await db
+          .select()
+          .from(schema.keysTable)
+          .where(and(eq(schema.keysTable.tierId, t.id), eq(schema.keysTable.isSold, false)));
+        return { tier: t, count: available.length };
+      })
+    );
+
+    const header =
+      `🎮 <b>${p.name}</b>\n\n` +
+      (p.description ? `📝 ${p.description}\n\n` : "") +
+      `💲 <b>Выберите тариф:</b>`;
+
+    const buttons: TelegramBot.InlineKeyboardButton[][] = tierRows.map(({ tier, count }) => [
+      {
+        text: `${tier.name} — ${tier.price}₽ ${count > 0 ? `(${count} шт.)` : "❌ нет"}`,
+        callback_data: count > 0 ? `tier_${tier.id}` : `tier_empty_${tier.id}`,
+      },
+    ]);
+    buttons.push([{ text: "🔙 Назад", callback_data: `cat_${p.categoryId}` }]);
+
+    await bot.editMessageText(header, {
+      chat_id: query.message!.chat.id,
+      message_id: query.message!.message_id,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: buttons },
+    });
+  } else {
+    // No tiers — show single price view (legacy)
+    const availableKeys = await db
+      .select()
+      .from(schema.keysTable)
+      .where(and(eq(schema.keysTable.productId, prodId), eq(schema.keysTable.isSold, false), isNull(schema.keysTable.tierId)));
+
+    const count = availableKeys.length;
+    const text =
+      `🎮 <b>${p.name}</b>\n\n` +
+      (p.description ? `📝 ${p.description}\n\n` : "") +
+      `💰 Цена: <b>${p.price}₽</b>\n` +
+      `🔑 Доступно ключей: <b>${count}</b>`;
+
+    const buttons: TelegramBot.InlineKeyboardButton[][] = [];
+    if (count > 0) {
+      buttons.push([{ text: "🛒 Купить", callback_data: `buy_${prodId}` }]);
+    }
+    buttons.push([{ text: "🔙 Назад", callback_data: `cat_${p.categoryId}` }]);
+
+    await bot.editMessageText(text, {
+      chat_id: query.message!.chat.id,
+      message_id: query.message!.message_id,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: buttons },
+    });
+  }
+
+  await bot.answerCallbackQuery(query.id);
+}
+
+export async function handleTierCallback(bot: TelegramBot, query: TelegramBot.CallbackQuery, tierId: number) {
+  // tier_empty_ prefix — just notify, no action
+  if (query.data?.startsWith("tier_empty_")) {
+    await bot.answerCallbackQuery(query.id, { text: "❌ Ключи для этого тарифа закончились", show_alert: true });
+    return;
+  }
+
+  const tier = await db.select().from(schema.tiersTable).where(eq(schema.tiersTable.id, tierId)).limit(1);
+  if (!tier[0]) {
+    await bot.answerCallbackQuery(query.id, { text: "Тариф не найден" });
+    return;
+  }
+
+  const product = await db.select().from(schema.productsTable).where(eq(schema.productsTable.id, tier[0].productId)).limit(1);
+  const available = await db
     .select()
     .from(schema.keysTable)
-    .where(and(eq(schema.keysTable.productId, prodId), eq(schema.keysTable.isSold, false)));
+    .where(and(eq(schema.keysTable.tierId, tierId), eq(schema.keysTable.isSold, false)));
 
-  const p = product[0];
-  const count = availableKeys.length;
+  const t = tier[0];
+  const count = available.length;
   const text =
-    `🎮 <b>${p.name}</b>\n\n` +
-    (p.description ? `📝 ${p.description}\n\n` : "") +
-    `💰 Цена: <b>${p.price}₽</b>\n` +
+    `🎮 <b>${product[0]?.name ?? ""}</b>\n` +
+    `💲 Тариф: <b>${t.name}</b>\n\n` +
+    `💰 Цена: <b>${t.price}₽</b>\n` +
     `🔑 Доступно ключей: <b>${count}</b>`;
 
   const buttons: TelegramBot.InlineKeyboardButton[][] = [];
   if (count > 0) {
-    buttons.push([{ text: "🛒 Купить", callback_data: `buy_${prodId}` }]);
+    buttons.push([{ text: `🛒 Купить — ${t.price}₽`, callback_data: `buy_tier_${tierId}` }]);
   }
-  buttons.push([{ text: "🔙 Назад", callback_data: `cat_${p.categoryId}` }]);
+  buttons.push([{ text: "🔙 Назад к тарифам", callback_data: `prod_${t.productId}` }]);
 
   await bot.editMessageText(text, {
     chat_id: query.message!.chat.id,
@@ -106,6 +185,68 @@ export async function handleProductCallback(bot: TelegramBot, query: TelegramBot
     reply_markup: { inline_keyboard: buttons },
   });
   await bot.answerCallbackQuery(query.id);
+}
+
+export async function handleBuyTierCallback(bot: TelegramBot, query: TelegramBot.CallbackQuery, tierId: number) {
+  const userId = query.from.id;
+
+  const tier = await db.select().from(schema.tiersTable).where(eq(schema.tiersTable.id, tierId)).limit(1);
+  if (!tier[0]) {
+    await bot.answerCallbackQuery(query.id, { text: "Тариф не найден" });
+    return;
+  }
+
+  const product = await db.select().from(schema.productsTable).where(eq(schema.productsTable.id, tier[0].productId)).limit(1);
+  const user = await db.select().from(schema.usersTable).where(eq(schema.usersTable.id, userId)).limit(1);
+
+  if (!user[0]) {
+    await bot.answerCallbackQuery(query.id, { text: "Пользователь не найден" });
+    return;
+  }
+
+  if (user[0].balance < tier[0].price) {
+    await bot.answerCallbackQuery(query.id, { text: "❌ Недостаточно средств!" });
+    await bot.sendMessage(
+      query.message!.chat.id,
+      `💸 Недостаточно средств!\n\nВаш баланс: <b>${user[0].balance}₽</b>\nЦена тарифа: <b>${tier[0].price}₽</b>\n\nПополните баланс в разделе «Мой кабинет».`,
+      { parse_mode: "HTML" }
+    );
+    return;
+  }
+
+  const availableKey = await db
+    .select()
+    .from(schema.keysTable)
+    .where(and(eq(schema.keysTable.tierId, tierId), eq(schema.keysTable.isSold, false)))
+    .limit(1);
+
+  if (!availableKey[0]) {
+    await bot.answerCallbackQuery(query.id, { text: "❌ Ключи закончились!" });
+    return;
+  }
+
+  await db.update(schema.keysTable)
+    .set({ isSold: true, soldTo: userId, soldAt: new Date() })
+    .where(eq(schema.keysTable.id, availableKey[0].id));
+
+  await db.update(schema.usersTable)
+    .set({ balance: user[0].balance - tier[0].price })
+    .where(eq(schema.usersTable.id, userId));
+
+  await db.insert(schema.purchasesTable).values({
+    userId,
+    productId: tier[0].productId,
+    keyValue: availableKey[0].keyValue,
+    pricePaid: tier[0].price,
+  });
+
+  await bot.answerCallbackQuery(query.id, { text: "✅ Покупка успешна!" });
+  await bot.sendMessage(
+    query.message!.chat.id,
+    `✅ <b>Покупка успешна!</b>\n\nТовар: <b>${product[0]?.name ?? ""}</b>\nТариф: <b>${tier[0].name}</b>\nСписано: <b>${tier[0].price}₽</b>\nОстаток баланса: <b>${user[0].balance - tier[0].price}₽</b>\n\n🔑 Ваш ключ:\n<code>${availableKey[0].keyValue}</code>`,
+    { parse_mode: "HTML" }
+  );
+  logger.info({ userId, tierId, productId: tier[0].productId }, "Tier purchase completed");
 }
 
 export async function handleBuyCallback(bot: TelegramBot, query: TelegramBot.CallbackQuery, prodId: number) {
@@ -135,7 +276,7 @@ export async function handleBuyCallback(bot: TelegramBot, query: TelegramBot.Cal
   const availableKey = await db
     .select()
     .from(schema.keysTable)
-    .where(and(eq(schema.keysTable.productId, prodId), eq(schema.keysTable.isSold, false)))
+    .where(and(eq(schema.keysTable.productId, prodId), eq(schema.keysTable.isSold, false), isNull(schema.keysTable.tierId)))
     .limit(1);
 
   if (!availableKey[0]) {
@@ -161,7 +302,7 @@ export async function handleBuyCallback(bot: TelegramBot, query: TelegramBot.Cal
   await bot.answerCallbackQuery(query.id, { text: "✅ Покупка успешна!" });
   await bot.sendMessage(
     query.message!.chat.id,
-    `✅ <b>Покупка успешна!</b>\n\nТовар: <b>${product[0].name}</b>\nСпишем: <b>${product[0].price}₽</b>\nОстаток баланса: <b>${user[0].balance - product[0].price}₽</b>\n\n🔑 Ваш ключ:\n<code>${availableKey[0].keyValue}</code>`,
+    `✅ <b>Покупка успешна!</b>\n\nТовар: <b>${product[0].name}</b>\nСписано: <b>${product[0].price}₽</b>\nОстаток баланса: <b>${user[0].balance - product[0].price}₽</b>\n\n🔑 Ваш ключ:\n<code>${availableKey[0].keyValue}</code>`,
     { parse_mode: "HTML" }
   );
   logger.info({ userId, productId: prodId }, "Purchase completed");

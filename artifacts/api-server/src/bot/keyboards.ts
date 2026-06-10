@@ -28,6 +28,7 @@ export const adminKeyboard: TelegramBot.InlineKeyboardMarkup = {
     [{ text: "👑 Добавить админа", callback_data: "admin_add_admin" }],
     [{ text: "📂 Добавить категорию", callback_data: "admin_add_category" }],
     [{ text: "🎮 Добавить продукт", callback_data: "admin_add_product" }],
+    [{ text: "💲 Добавить тариф к продукту", callback_data: "admin_add_tier" }],
     [{ text: "🔑 Добавить ключ", callback_data: "admin_add_key" }],
     [{ text: "🚫 Забанить пользователя", callback_data: "admin_ban_user" }],
     [{ text: "🎁 Создать промокод", callback_data: "admin_create_promo" }],

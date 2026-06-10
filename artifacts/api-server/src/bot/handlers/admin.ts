@@ -60,13 +60,25 @@ export async function handleAdminCallback(bot: TelegramBot, query: TelegramBot.C
       break;
     }
 
+    case "admin_add_tier": {
+      const prods = await db.select().from(schema.productsTable);
+      if (prods.length === 0) {
+        await bot.sendMessage(chatId, "❌ Сначала создайте хотя бы один продукт.");
+        return;
+      }
+      const list = prods.map((p) => `${p.id}: ${p.name}`).join("\n");
+      setAdminState(userId, "add_tier_wait_product");
+      await bot.sendMessage(chatId, `💲 <b>Добавить тариф</b>\n\nДоступные продукты:\n${list}\n\nВведите ID продукта:`, { parse_mode: "HTML" });
+      break;
+    }
+
     case "admin_add_key": {
       const prods = await db.select().from(schema.productsTable);
       if (prods.length === 0) {
         await bot.sendMessage(chatId, "❌ Сначала создайте хотя бы один продукт.");
         return;
       }
-      const list = prods.map((p) => `${p.id}: ${p.name} (${p.price}₽)`).join("\n");
+      const list = prods.map((p) => `${p.id}: ${p.name}`).join("\n");
       setAdminState(userId, "add_key_wait_product");
       await bot.sendMessage(chatId, `📦 Доступные продукты:\n${list}\n\nВведите ID продукта:`);
       break;
@@ -198,7 +210,7 @@ export async function handleAdminMessage(bot: TelegramBot, msg: TelegramBot.Mess
 
     case "add_product_wait_desc":
       setAdminState(userId, "add_product_wait_price", { ...state.data, description: text === "-" ? "" : text });
-      await bot.sendMessage(chatId, "💰 Введите цену в рублях (например: 299):");
+      await bot.sendMessage(chatId, "💰 Введите базовую цену в рублях (используется если нет тарифов, например: 299):");
       return true;
 
     case "add_product_wait_price": {
@@ -215,10 +227,63 @@ export async function handleAdminMessage(bot: TelegramBot, msg: TelegramBot.Mess
         price,
       });
       clearAdminState(userId);
-      await bot.sendMessage(chatId, `✅ Продукт <b>${name}</b> за ${price}₽ добавлен.`, { parse_mode: "HTML" });
+      await bot.sendMessage(
+        chatId,
+        `✅ Продукт <b>${name}</b> добавлен.\n\n💡 Совет: добавьте тарифы через кнопку «💲 Добавить тариф к продукту», чтобы покупатели видели варианты цен.`,
+        { parse_mode: "HTML" }
+      );
       return true;
     }
 
+    // --- Tier flow ---
+    case "add_tier_wait_product": {
+      const prodId = parseInt(text.trim(), 10);
+      if (isNaN(prodId)) {
+        await bot.sendMessage(chatId, "❌ Введите числовой ID:");
+        return true;
+      }
+      const prod = await db.select().from(schema.productsTable).where(eq(schema.productsTable.id, prodId)).limit(1);
+      if (!prod[0]) {
+        await bot.sendMessage(chatId, "❌ Продукт не найден. Введите корректный ID:");
+        return true;
+      }
+      setAdminState(userId, "add_tier_wait_name", { productId: prodId, productName: prod[0].name });
+      await bot.sendMessage(chatId, `📝 Введите название тарифа для <b>${prod[0].name}</b>:\n\n<i>Пример: «1 месяц», «3 месяца», «Навсегда»</i>`, { parse_mode: "HTML" });
+      return true;
+    }
+
+    case "add_tier_wait_name":
+      setAdminState(userId, "add_tier_wait_price", { ...state.data, tierName: text });
+      await bot.sendMessage(chatId, `💰 Введите цену тарифа «<b>${text}</b>» в рублях:`, { parse_mode: "HTML" });
+      return true;
+
+    case "add_tier_wait_price": {
+      const price = parseInt(text.trim(), 10);
+      if (isNaN(price) || price <= 0) {
+        await bot.sendMessage(chatId, "❌ Введите корректную цену:");
+        return true;
+      }
+      const { productId, productName, tierName } = state.data;
+      await db.insert(schema.tiersTable).values({
+        productId: productId as number,
+        name: tierName as string,
+        price,
+      });
+
+      // Show existing tiers and offer to add more
+      const existingTiers = await db.select().from(schema.tiersTable).where(eq(schema.tiersTable.productId, productId as number));
+      const tierList = existingTiers.map((t) => `• ${t.name} — ${t.price}₽`).join("\n");
+
+      clearAdminState(userId);
+      await bot.sendMessage(
+        chatId,
+        `✅ Тариф <b>${tierName as string}</b> за <b>${price}₽</b> добавлен к продукту <b>${productName as string}</b>!\n\n📋 Текущие тарифы:\n${tierList}\n\n💡 Теперь добавьте ключи для этого тарифа через «🔑 Добавить ключ».`,
+        { parse_mode: "HTML" }
+      );
+      return true;
+    }
+
+    // --- Key flow (now tier-aware) ---
     case "add_key_wait_product": {
       const prodId = parseInt(text.trim(), 10);
       if (isNaN(prodId)) {
@@ -230,24 +295,58 @@ export async function handleAdminMessage(bot: TelegramBot, msg: TelegramBot.Mess
         await bot.sendMessage(chatId, "❌ Продукт не найден. Введите корректный ID:");
         return true;
       }
-      setAdminState(userId, "add_key_wait_value", { productId: prodId, productName: prod[0].name });
-      await bot.sendMessage(chatId, `🔑 Введите ключ для продукта <b>${prod[0].name}</b>:\n\n(Вы можете отправить несколько ключей — по одному на строку)`, { parse_mode: "HTML" });
+
+      // Check if product has tiers
+      const tiers = await db.select().from(schema.tiersTable).where(eq(schema.tiersTable.productId, prodId));
+      if (tiers.length === 0) {
+        // No tiers — add key directly to product
+        setAdminState(userId, "add_key_wait_value", { productId: prodId, productName: prod[0].name, tierId: 0 });
+        await bot.sendMessage(chatId, `🔑 Введите ключи для <b>${prod[0].name}</b>:\n\n(По одному на строку — можно несколько сразу)`, { parse_mode: "HTML" });
+      } else {
+        // Has tiers — ask which tier
+        const list = tiers.map((t) => `${t.id}: ${t.name} — ${t.price}₽`).join("\n");
+        setAdminState(userId, "add_key_wait_tier", { productId: prodId, productName: prod[0].name });
+        await bot.sendMessage(chatId, `💲 Тарифы продукта <b>${prod[0].name}</b>:\n${list}\n\nВведите ID тарифа, к которому добавляем ключи:`, { parse_mode: "HTML" });
+      }
+      return true;
+    }
+
+    case "add_key_wait_tier": {
+      const tierId = parseInt(text.trim(), 10);
+      if (isNaN(tierId)) {
+        await bot.sendMessage(chatId, "❌ Введите числовой ID тарифа:");
+        return true;
+      }
+      const tier = await db.select().from(schema.tiersTable).where(eq(schema.tiersTable.id, tierId)).limit(1);
+      if (!tier[0] || tier[0].productId !== (state.data.productId as number)) {
+        await bot.sendMessage(chatId, "❌ Тариф не найден. Введите корректный ID:");
+        return true;
+      }
+      setAdminState(userId, "add_key_wait_value", { ...state.data, tierId, tierName: tier[0].name });
+      await bot.sendMessage(chatId, `🔑 Введите ключи для тарифа <b>${tier[0].name}</b>:\n\n(По одному на строку — можно несколько сразу)`, { parse_mode: "HTML" });
       return true;
     }
 
     case "add_key_wait_value": {
       const prodId = state.data.productId as number;
       const productName = state.data.productName as string;
+      const tierId = state.data.tierId as number;
+      const tierName = state.data.tierName as string | undefined;
       const keys = text.split("\n").map((k) => k.trim()).filter((k) => k.length > 0);
       if (keys.length === 0) {
         await bot.sendMessage(chatId, "❌ Введите хотя бы один ключ:");
         return true;
       }
       for (const key of keys) {
-        await db.insert(schema.keysTable).values({ productId: prodId, keyValue: key });
+        await db.insert(schema.keysTable).values({
+          productId: prodId,
+          tierId: tierId > 0 ? tierId : null,
+          keyValue: key,
+        });
       }
       clearAdminState(userId);
-      await bot.sendMessage(chatId, `✅ Добавлено <b>${keys.length}</b> ключ(ей) для <b>${productName}</b>.`, { parse_mode: "HTML" });
+      const target = tierName ? `тарифа <b>${tierName}</b>` : `продукта <b>${productName}</b>`;
+      await bot.sendMessage(chatId, `✅ Добавлено <b>${keys.length}</b> ключ(ей) для ${target}.`, { parse_mode: "HTML" });
       return true;
     }
 

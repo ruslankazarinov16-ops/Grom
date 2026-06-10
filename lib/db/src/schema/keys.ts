@@ -2,10 +2,12 @@ import { pgTable, serial, text, integer, boolean, timestamp, bigint } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { productsTable } from "./products";
+import { tiersTable } from "./tiers";
 
 export const keysTable = pgTable("keys", {
   id: serial("id").primaryKey(),
   productId: integer("product_id").notNull().references(() => productsTable.id),
+  tierId: integer("tier_id").references(() => tiersTable.id),
   keyValue: text("key_value").notNull(),
   isSold: boolean("is_sold").notNull().default(false),
   soldTo: bigint("sold_to", { mode: "number" }),

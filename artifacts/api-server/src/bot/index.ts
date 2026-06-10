@@ -7,6 +7,8 @@ import {
   handleCatalog,
   handleCategoryCallback,
   handleProductCallback,
+  handleTierCallback,
+  handleBuyTierCallback,
   handleBuyCallback,
   handleCabinet,
   handlePurchases,
@@ -154,6 +156,23 @@ export function startBot() {
       if (data.startsWith("prod_")) {
         const prodId = parseInt(data.replace("prod_", ""), 10);
         await handleProductCallback(bot, query, prodId);
+        return;
+      }
+
+      if (data.startsWith("tier_empty_")) {
+        await handleTierCallback(bot, query, 0);
+        return;
+      }
+
+      if (data.startsWith("tier_")) {
+        const tierId = parseInt(data.replace("tier_", ""), 10);
+        await handleTierCallback(bot, query, tierId);
+        return;
+      }
+
+      if (data.startsWith("buy_tier_")) {
+        const tierId = parseInt(data.replace("buy_tier_", ""), 10);
+        await handleBuyTierCallback(bot, query, tierId);
         return;
       }
 
